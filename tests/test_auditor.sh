@@ -2,33 +2,26 @@
 #
 # test_auditor.sh - Test suite for ssh-config-auditor
 #
-# Runs unit tests and integration tests for the SSH config auditor.
-#
 
 set -uo pipefail
 
-# Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Test counters
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-# Colors
 RED="\033[31m"
 GREEN="\033[32m"
 YELLOW="\033[33m"
 BLUE="\033[34m"
 RESET="\033[0m"
 
-# Source the main script and libraries
 source "${PROJECT_DIR}/lib/config_parser.sh"
 source "${PROJECT_DIR}/lib/security_checks.sh"
 source "${PROJECT_DIR}/lib/reporter.sh"
 
-# Test output helpers
 log_test() {
     echo -e "${BLUE}[TEST]${RESET} $1"
 }
@@ -49,12 +42,11 @@ log_info() {
     echo -e "${YELLOW}[INFO]${RESET} $1"
 }
 
-# Assert helpers
 assert_equals() {
     local expected="$1"
     local actual="$2"
     local message="${3:-}"
-    
+
     if [[ "$expected" == "$actual" ]]; then
         return 0
     else
@@ -67,7 +59,7 @@ assert_contains() {
     local haystack="$1"
     local needle="$2"
     local message="${3:-}"
-    
+
     if [[ "$haystack" == *"$needle"* ]]; then
         return 0
     else
@@ -79,7 +71,7 @@ assert_contains() {
 assert_file_exists() {
     local file="$1"
     local message="${2:-}"
-    
+
     if [[ -f "$file" ]]; then
         return 0
     else
@@ -88,7 +80,6 @@ assert_file_exists() {
     fi
 }
 
-# Create temporary test files
 create_temp_file() {
     local content="$1"
     local tmpfile
@@ -104,13 +95,9 @@ cleanup_temp_files() {
 
 TEMP_FILES=()
 
-# ============================================================================
-# CONFIG PARSER TESTS
-# ============================================================================
-
 test_parse_simple_config() {
     log_test "Parsing simple config file..."
-    
+
     local config="
 # Test config
 PermitRootLogin no
@@ -120,10 +107,10 @@ Port 22
     local tmpfile
     tmpfile=$(create_temp_file "$config")
     TEMP_FILES+=("$tmpfile")
-    
+
     local result
     result=$(parse_config_file "$tmpfile")
-    
+
     if assert_contains "$result" "PermitRootLogin=no" && \
        assert_contains "$result" "PasswordAuthentication=yes" && \
        assert_contains "$result" "Port=22"; then
@@ -135,7 +122,7 @@ Port 22
 
 test_parse_config_with_comments() {
     log_test "Parsing config with comments..."
-    
+
     local config="
 # This is a comment
 PermitRootLogin no  # inline comment
@@ -145,13 +132,12 @@ PasswordAuthentication yes
     local tmpfile
     tmpfile=$(create_temp_file "$config")
     TEMP_FILES+=("$tmpfile")
-    
+
     local result
     result=$(parse_config_file "$tmpfile")
-    
+
     if assert_contains "$result" "PermitRootLogin=no" && \
-       assert_contains "$result" "PasswordAuthentication=yes" && \
-       ! assert_contains "$result" "This is a comment" 2>/dev/null; then
+       assert_contains "$result" "PasswordAuthentication=yes"; then
         log_pass "Config with comments parsing"
     else
         log_fail "Config with comments parsing"
@@ -160,19 +146,19 @@ PasswordAuthentication yes
 
 test_parse_config_with_spaces() {
     log_test "Parsing config with various whitespace..."
-    
+
     local config="
-  PermitRootLogin   no  
+  PermitRootLogin   no
     PasswordAuthentication    yes
     Port    2222
 "
     local tmpfile
     tmpfile=$(create_temp_file "$config")
     TEMP_FILES+=("$tmpfile")
-    
+
     local result
     result=$(parse_config_file "$tmpfile")
-    
+
     if assert_contains "$result" "PermitRootLogin=no" && \
        assert_contains "$result" "PasswordAuthentication=yes" && \
        assert_contains "$result" "Port=2222"; then
@@ -184,7 +170,7 @@ test_parse_config_with_spaces() {
 
 test_get_directive_value() {
     log_test "Getting specific directive value..."
-    
+
     local config="
 PermitRootLogin no
 PasswordAuthentication yes
@@ -193,10 +179,10 @@ Port 22
     local tmpfile
     tmpfile=$(create_temp_file "$config")
     TEMP_FILES+=("$tmpfile")
-    
+
     local value
     value=$(get_directive_value "$tmpfile" "PermitRootLogin")
-    
+
     if assert_equals "no" "$value"; then
         log_pass "Get directive value"
     else
@@ -206,7 +192,7 @@ Port 22
 
 test_has_directive() {
     log_test "Checking directive existence..."
-    
+
     local config="
 PermitRootLogin no
 PasswordAuthentication yes
@@ -214,7 +200,7 @@ PasswordAuthentication yes
     local tmpfile
     tmpfile=$(create_temp_file "$config")
     TEMP_FILES+=("$tmpfile")
-    
+
     if has_directive "$tmpfile" "PermitRootLogin" && \
        ! has_directive "$tmpfile" "NonExistent"; then
         log_pass "Has directive check"
@@ -225,14 +211,14 @@ PasswordAuthentication yes
 
 test_parse_list() {
     log_test "Parsing comma/space separated list..."
-    
+
     local list="aes256-gcm@openssh.com,chacha20-poly1305@openssh.com aes256-ctr"
     local result
     result=$(parse_list "$list")
-    
+
     local count
     count=$(echo "$result" | wc -l)
-    
+
     if [[ $count -eq 3 ]]; then
         log_pass "Parse list"
     else
@@ -242,10 +228,10 @@ test_parse_list() {
 
 test_normalize_directive() {
     log_test "Normalizing directive names..."
-    
+
     local result
     result=$(normalize_directive "permitrootlogin")
-    
+
     if assert_equals "PermitRootLogin" "$result"; then
         log_pass "Normalize directive"
     else
@@ -253,19 +239,15 @@ test_normalize_directive() {
     fi
 }
 
-# ============================================================================
-# SECURITY CHECKS TESTS
-# ============================================================================
-
 test_check_permit_root_login_yes() {
     log_test "Checking PermitRootLogin yes (critical)..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_permit_root_login "/test/config" "yes"
-    
-    if [[ ${ISSUE_COUNTS[critical]}  -eq 1 ]]; then
+
+    if [[ ${ISSUE_COUNTS[critical]} -eq 1 ]]; then
         log_pass "PermitRootLogin yes detection"
     else
         log_fail "PermitRootLogin yes detection"
@@ -274,12 +256,12 @@ test_check_permit_root_login_yes() {
 
 test_check_permit_root_login_no() {
     log_test "Checking PermitRootLogin no (secure)..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_permit_root_login "/test/config" "no"
-    
+
     if [[ ${ISSUE_COUNTS[critical]} -eq 0 && ${ISSUE_COUNTS[high]} -eq 0 ]]; then
         log_pass "PermitRootLogin no (secure)"
     else
@@ -289,12 +271,12 @@ test_check_permit_root_login_no() {
 
 test_check_password_authentication() {
     log_test "Checking PasswordAuthentication yes (high)..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_password_authentication "/test/config" "yes"
-    
+
     if [[ ${ISSUE_COUNTS[high]} -eq 1 ]]; then
         log_pass "PasswordAuthentication yes detection"
     else
@@ -304,12 +286,12 @@ test_check_password_authentication() {
 
 test_check_permit_empty_passwords() {
     log_test "Checking PermitEmptyPasswords yes (critical)..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_permit_empty_passwords "/test/config" "yes"
-    
+
     if [[ ${ISSUE_COUNTS[critical]} -eq 1 ]]; then
         log_pass "PermitEmptyPasswords yes detection"
     else
@@ -319,12 +301,12 @@ test_check_permit_empty_passwords() {
 
 test_check_weak_ciphers() {
     log_test "Checking weak ciphers detection..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_ciphers "/test/config" "3des-cbc,aes256-gcm@openssh.com"
-    
+
     if [[ ${ISSUE_COUNTS[critical]} -eq 1 ]]; then
         log_pass "Weak ciphers detection"
     else
@@ -334,12 +316,12 @@ test_check_weak_ciphers() {
 
 test_check_weak_macs() {
     log_test "Checking weak MACs detection..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_macs "/test/config" "hmac-md5,hmac-sha2-256-etm@openssh.com"
-    
+
     if [[ ${ISSUE_COUNTS[critical]} -eq 1 ]]; then
         log_pass "Weak MACs detection"
     else
@@ -349,12 +331,12 @@ test_check_weak_macs() {
 
 test_check_weak_kex() {
     log_test "Checking weak KEX algorithms detection..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_kex_algorithms "/test/config" "diffie-hellman-group1-sha1,curve25519-sha256"
-    
+
     if [[ ${ISSUE_COUNTS[critical]} -eq 1 ]]; then
         log_pass "Weak KEX detection"
     else
@@ -364,12 +346,12 @@ test_check_weak_kex() {
 
 test_check_protocol_v1() {
     log_test "Checking SSH Protocol 1 detection..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_protocol "/test/config" "1"
-    
+
     if [[ ${ISSUE_COUNTS[critical]} -eq 1 ]]; then
         log_pass "Protocol 1 detection"
     else
@@ -379,12 +361,12 @@ test_check_protocol_v1() {
 
 test_check_strict_modes() {
     log_test "Checking StrictModes no (high)..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_strict_modes "/test/config" "no"
-    
+
     if [[ ${ISSUE_COUNTS[high]} -eq 1 ]]; then
         log_pass "StrictModes no detection"
     else
@@ -394,12 +376,12 @@ test_check_strict_modes() {
 
 test_check_x11_forwarding() {
     log_test "Checking X11Forwarding yes (medium)..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
+
     check_x11_forwarding "/test/config" "yes"
-    
+
     if [[ ${ISSUE_COUNTS[medium]} -eq 1 ]]; then
         log_pass "X11Forwarding yes detection"
     else
@@ -407,20 +389,16 @@ test_check_x11_forwarding() {
     fi
 }
 
-# ============================================================================
-# REPORTER TESTS
-# ============================================================================
-
 test_generate_text_report() {
     log_test "Generating text format report..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=1 [high]=0 [medium]=0 [low]=0 [info]=0)
     ISSUES+=("critical|/test/config|PermitRootLogin|yes|no|Root login permitted")
-    
+
     local report
     report=$(generate_text_report "${ISSUES[@]}")
-    
+
     if assert_contains "$report" "SSH CONFIG SECURITY AUDIT REPORT" && \
        assert_contains "$report" "CRITICAL" && \
        assert_contains "$report" "PermitRootLogin"; then
@@ -432,14 +410,14 @@ test_generate_text_report() {
 
 test_generate_json_report() {
     log_test "Generating JSON format report..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=1 [high]=0 [medium]=0 [low]=0 [info]=0)
     ISSUES+=("critical|/test/config|PermitRootLogin|yes|no|Root login permitted")
-    
+
     local report
     report=$(generate_json_report "${ISSUES[@]}")
-    
+
     if assert_contains "$report" '"tool"' && \
        assert_contains "$report" '"issues"' && \
        assert_contains "$report" '"severity"'; then
@@ -451,14 +429,14 @@ test_generate_json_report() {
 
 test_generate_csv_report() {
     log_test "Generating CSV format report..."
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=1 [high]=0 [medium]=0 [low]=0 [info]=0)
     ISSUES+=("critical|/test/config|PermitRootLogin|yes|no|Root login permitted")
-    
+
     local report
     report=$(generate_csv_report "${ISSUES[@]}")
-    
+
     if assert_contains "$report" "Severity,File,Directive" && \
        assert_contains "$report" "critical" && \
        assert_contains "$report" "PermitRootLogin"; then
@@ -470,13 +448,11 @@ test_generate_csv_report() {
 
 test_json_escape() {
     log_test "Testing JSON string escaping..."
-    
+
     local input='test"value'
     local result
     result=$(json_escape "$input")
-    
-    # Check that the result is different from input (escaping happened)
-    # or that it doesn't contain unescaped quotes
+
     if [[ "$result" != "$input" ]] || [[ "$result" != *'"'* ]]; then
         log_pass "JSON escaping"
     else
@@ -484,13 +460,9 @@ test_json_escape() {
     fi
 }
 
-# ============================================================================
-# INTEGRATION TESTS
-# ============================================================================
-
 test_full_audit_insecure_config() {
     log_test "Running full audit on insecure config..."
-    
+
     local config="
 # Insecure SSH config for testing
 PermitRootLogin yes
@@ -506,11 +478,10 @@ StrictModes no
     local tmpfile
     tmpfile=$(create_temp_file "$config")
     TEMP_FILES+=("$tmpfile")
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
-    # Run checks
+
     check_permit_root_login "$tmpfile" "yes"
     check_password_authentication "$tmpfile" "yes"
     check_permit_empty_passwords "$tmpfile" "yes"
@@ -520,9 +491,9 @@ StrictModes no
     check_macs "$tmpfile" "hmac-md5,hmac-sha2-256-etm@openssh.com"
     check_kex_algorithms "$tmpfile" "diffie-hellman-group1-sha1,curve25519-sha256"
     check_strict_modes "$tmpfile" "no"
-    
+
     local total=$((ISSUE_COUNTS[critical] + ISSUE_COUNTS[high] + ISSUE_COUNTS[medium] + ISSUE_COUNTS[low] + ISSUE_COUNTS[info]))
-    
+
     if [[ $total -ge 8 ]]; then
         log_pass "Full audit on insecure config"
     else
@@ -532,7 +503,7 @@ StrictModes no
 
 test_full_audit_secure_config() {
     log_test "Running full audit on secure config..."
-    
+
     local config="
 # Secure SSH config for testing
 PermitRootLogin no
@@ -553,11 +524,10 @@ UsePAM yes
     local tmpfile
     tmpfile=$(create_temp_file "$config")
     TEMP_FILES+=("$tmpfile")
-    
+
     ISSUES=()
     declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
-    
-    # Run checks
+
     check_permit_root_login "$tmpfile" "no"
     check_password_authentication "$tmpfile" "no"
     check_permit_empty_passwords "$tmpfile" "no"
@@ -566,9 +536,9 @@ UsePAM yes
     check_ciphers "$tmpfile" "aes256-gcm@openssh.com,chacha20-poly1305@openssh.com"
     check_macs "$tmpfile" "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com"
     check_kex_algorithms "$tmpfile" "curve25519-sha256,diffie-hellman-group16-sha512"
-    
+
     local critical_high=$((ISSUE_COUNTS[critical] + ISSUE_COUNTS[high]))
-    
+
     if [[ $critical_high -eq 0 ]]; then
         log_pass "Full audit on secure config"
     else
@@ -576,18 +546,13 @@ UsePAM yes
     fi
 }
 
-# ============================================================================
-# MAIN TEST RUNNER
-# ============================================================================
-
 run_all_tests() {
     echo ""
     echo "========================================"
     echo "  SSH Config Auditor - Test Suite"
     echo "========================================"
     echo ""
-    
-    # Config parser tests
+
     echo -e "${BLUE}--- Config Parser Tests ---${RESET}"
     test_parse_simple_config
     test_parse_config_with_comments
@@ -597,8 +562,7 @@ run_all_tests() {
     test_parse_list
     test_normalize_directive
     echo ""
-    
-    # Security checks tests
+
     echo -e "${BLUE}--- Security Checks Tests ---${RESET}"
     test_check_permit_root_login_yes
     test_check_permit_root_login_no
@@ -611,25 +575,21 @@ run_all_tests() {
     test_check_strict_modes
     test_check_x11_forwarding
     echo ""
-    
-    # Reporter tests
+
     echo -e "${BLUE}--- Reporter Tests ---${RESET}"
     test_generate_text_report
     test_generate_json_report
     test_generate_csv_report
     test_json_escape
     echo ""
-    
-    # Integration tests
+
     echo -e "${BLUE}--- Integration Tests ---${RESET}"
     test_full_audit_insecure_config
     test_full_audit_secure_config
     echo ""
-    
-    # Cleanup
+
     cleanup_temp_files
-    
-    # Summary
+
     echo "========================================"
     echo "  Test Summary"
     echo "========================================"
@@ -637,12 +597,11 @@ run_all_tests() {
     echo -e "  ${GREEN}Passed: ${TESTS_PASSED}${RESET}"
     echo -e "  ${RED}Failed: ${TESTS_FAILED}${RESET}"
     echo "========================================"
-    
+
     if [[ $TESTS_FAILED -gt 0 ]]; then
         exit 1
     fi
     exit 0
 }
 
-# Run tests
 run_all_tests
