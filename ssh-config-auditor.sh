@@ -229,15 +229,28 @@ run_audit() {
 
     log info "Auditing file: $file"
 
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
     local tmpdirectives
     tmpdirectives=$(mktemp)
     parse_config_file "$file" > "$tmpdirectives"
+    PARSE_ERRORS_FILE=""
+
+    if has_parse_errors "$errors_file"; then
+        log warn "Malformed config entries detected in $file:"
+        while IFS= read -r error; do
+            echo "  $error" >&2
+        done < "$errors_file"
+    fi
 
     local -A directives
     while IFS='=' read -r key value; do
         [[ -n "$key" ]] && directives["$key"]="$value"
     done < "$tmpdirectives"
-    rm -f "$tmpdirectives"
+
+    rm -f "$tmpdirectives" "$errors_file"
 
     check_permit_root_login "$file" "${directives[PermitRootLogin]:-}"
     check_password_authentication "$file" "${directives[PasswordAuthentication]:-}"

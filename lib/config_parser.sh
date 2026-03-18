@@ -3,8 +3,12 @@
 # config_parser.sh - SSH configuration file parser module
 #
 
+PARSE_ERRORS_FILE=""
+
 parse_config_file() {
     local file="$1"
+    local line_num=0
+    local errors_file="${PARSE_ERRORS_FILE:-}"
 
     if [[ ! -r "$file" ]]; then
         echo "ERROR: Cannot read file: $file" >&2
@@ -12,6 +16,9 @@ parse_config_file() {
     fi
 
     while IFS= read -r line || [[ -n "$line" ]]; do
+        ((line_num++))
+        local original_line="$line"
+
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"
 
@@ -35,6 +42,10 @@ parse_config_file() {
             value="${BASH_REMATCH[2]}"
             directive=$(normalize_directive "$directive")
             echo "${directive}=${value}"
+        else
+            if [[ -n "$errors_file" ]]; then
+                echo "Line $line_num: Malformed entry: $original_line" >> "$errors_file"
+            fi
         fi
 
     done < "$file"
@@ -203,5 +214,51 @@ get_effective_value() {
         echo "$value"
     else
         echo "$default"
+    fi
+}
+
+parse_config_with_errors() {
+    local file="$1"
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    local output
+    output=$(parse_config_file "$file")
+    PARSE_ERRORS_FILE=""
+
+    echo "$output"
+    echo "ERRORS_FILE:$errors_file"
+}
+
+get_parse_errors() {
+    local errors_file="$1"
+    if [[ -n "$errors_file" && -f "$errors_file" ]]; then
+        cat "$errors_file"
+    fi
+}
+
+has_parse_errors() {
+    local errors_file="$1"
+    if [[ -n "$errors_file" && -f "$errors_file" ]]; then
+        [[ -s "$errors_file" ]]
+    else
+        return 1
+    fi
+}
+
+clear_parse_errors() {
+    local errors_file="$1"
+    if [[ -n "$errors_file" && -f "$errors_file" ]]; then
+        rm -f "$errors_file"
+    fi
+}
+
+count_parse_errors() {
+    local errors_file="$1"
+    if [[ -n "$errors_file" && -f "$errors_file" ]]; then
+        wc -l < "$errors_file"
+    else
+        echo 0
     fi
 }
