@@ -239,6 +239,136 @@ test_normalize_directive() {
     fi
 }
 
+test_parse_malformed_entries() {
+    log_test "Parsing config with malformed entries..."
+
+    local config="
+PermitRootLogin no
+123Invalid yes
+PasswordAuthentication yes
+@BadDirective value
+=InvalidStart test
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    local result
+    result=$(parse_config_file "$tmpfile")
+    PARSE_ERRORS_FILE=""
+
+    local error_count
+    error_count=$(count_parse_errors "$errors_file")
+
+    if has_parse_errors "$errors_file" && [[ "$error_count" -eq 3 ]]; then
+        log_pass "Malformed entries detection"
+        rm -f "$errors_file"
+    else
+        log_fail "Malformed entries detection (expected 3 errors, got $error_count)"
+        rm -f "$errors_file"
+    fi
+}
+
+test_parse_error_messages() {
+    log_test "Checking malformed entry error messages..."
+
+    local config="
+PermitRootLogin no
+123Invalid yes
+@BadDirective value
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    local result
+    result=$(parse_config_file "$tmpfile")
+    PARSE_ERRORS_FILE=""
+
+    local errors
+    errors=$(get_parse_errors "$errors_file")
+
+    rm -f "$errors_file"
+
+    if assert_contains "$errors" "Line 3" && \
+       assert_contains "$errors" "Malformed entry" && \
+       assert_contains "$errors" "123Invalid"; then
+        log_pass "Error message format"
+    else
+        log_fail "Error message format"
+    fi
+}
+
+test_clear_parse_errors() {
+    log_test "Testing clear_parse_errors function..."
+
+    local config="
+123Invalid yes
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    parse_config_file "$tmpfile" > /dev/null
+    PARSE_ERRORS_FILE=""
+
+    if has_parse_errors "$errors_file"; then
+        clear_parse_errors "$errors_file"
+        if ! has_parse_errors "$errors_file"; then
+            log_pass "Clear parse errors"
+            rm -f "$errors_file"
+        else
+            log_fail "Clear parse errors (errors still present)"
+            rm -f "$errors_file"
+        fi
+    else
+        log_fail "Clear parse errors (no errors to clear)"
+        rm -f "$errors_file"
+    fi
+}
+
+test_parse_valid_after_malformed() {
+    log_test "Parsing valid entries after malformed ones..."
+
+    local config="
+PermitRootLogin no
+123Invalid yes
+PasswordAuthentication yes
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    local result
+    result=$(parse_config_file "$tmpfile")
+    PARSE_ERRORS_FILE=""
+
+    rm -f "$errors_file"
+
+    if assert_contains "$result" "PermitRootLogin=no" && \
+       assert_contains "$result" "PasswordAuthentication=yes"; then
+        log_pass "Valid entries parsed after malformed"
+    else
+        log_fail "Valid entries parsed after malformed"
+    fi
+}
+
 test_check_permit_root_login_yes() {
     log_test "Checking PermitRootLogin yes (critical)..."
 
@@ -546,6 +676,46 @@ UsePAM yes
     fi
 }
 
+test_full_audit_with_malformed_entries() {
+    log_test "Running audit on config with malformed entries..."
+
+    local config="
+# Config with malformed entries
+PermitRootLogin yes
+123Invalid directive
+@BadDirective value
+PasswordAuthentication yes
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local parsed
+    parsed=$(parse_config_file "$tmpfile")
+    PARSE_ERRORS_FILE=""
+
+    local has_errors=0
+    if has_parse_errors "$errors_file"; then
+        has_errors=1
+    fi
+    rm -f "$errors_file"
+
+    if assert_contains "$parsed" "PermitRootLogin=yes" && \
+       assert_contains "$parsed" "PasswordAuthentication=yes" && \
+       [[ "$has_errors" -eq 1 ]]; then
+        log_pass "Audit with malformed entries"
+    else
+        log_fail "Audit with malformed entries"
+    fi
+}
+
 run_all_tests() {
     echo ""
     echo "========================================"
@@ -561,6 +731,14 @@ run_all_tests() {
     test_has_directive
     test_parse_list
     test_normalize_directive
+    echo ""
+
+    echo -e "${BLUE}--- Malformed Entry Tests ---${RESET}"
+    test_parse_malformed_entries
+    test_parse_error_messages
+    test_clear_parse_errors
+    test_parse_valid_after_malformed
+    test_full_audit_with_malformed_entries
     echo ""
 
     echo -e "${BLUE}--- Security Checks Tests ---${RESET}"
