@@ -232,10 +232,13 @@ run_audit() {
     local errors_file
     errors_file=$(mktemp)
 
-    PARSE_ERRORS_FILE="$errors_file"
     local tmpdirectives
     tmpdirectives=$(mktemp)
-    parse_config_file "$file" > "$tmpdirectives"
+
+    PARSE_ERRORS_FILE="$errors_file"
+    if ! parse_config_strict "$file" > "$tmpdirectives" 2>&1; then
+        log warn "Config file contains malformed entries"
+    fi
     PARSE_ERRORS_FILE=""
 
     if has_parse_errors "$errors_file"; then
@@ -243,14 +246,27 @@ run_audit() {
         while IFS= read -r error; do
             echo "  $error" >&2
         done < "$errors_file"
+        
+        local error_count
+        error_count=$(count_parse_errors "$errors_file")
+        log warn "Total malformed entries: $error_count"
     fi
 
     local -A directives
     while IFS='=' read -r key value; do
-        [[ -n "$key" ]] && directives["$key"]="$value"
+        [[ -z "$key" ]] && continue
+        [[ "$key" =~ ^[0-9]+$ ]] && continue
+        [[ "$key" == "Parsed:"* ]] && continue
+        [[ "$key" == "Errors:"* ]] && continue
+        directives["$key"]="$value"
     done < "$tmpdirectives"
 
     rm -f "$tmpdirectives" "$errors_file"
+
+    if [[ ${#directives[@]} -eq 0 ]]; then
+        log warn "No valid directives found in config file"
+        return 0
+    fi
 
     check_permit_root_login "$file" "${directives[PermitRootLogin]:-}"
     check_password_authentication "$file" "${directives[PasswordAuthentication]:-}"
@@ -311,10 +327,17 @@ main() {
         exit 5
     fi
 
+    local audit_failed=0
     for config_file in "${CONFIG_FILES[@]}"; do
         log info "Processing: $config_file"
-        run_audit "$config_file"
+        if ! run_audit "$config_file"; then
+            audit_failed=1
+        fi
     done
+
+    if [[ $audit_failed -eq 1 && ${#ISSUES[@]} -eq 0 ]]; then
+        exit 5
+    fi
 
     local report
     report=$(generate_report "${ISSUES[@]}")
