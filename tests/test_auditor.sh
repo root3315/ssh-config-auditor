@@ -369,6 +369,130 @@ PasswordAuthentication yes
     fi
 }
 
+test_validate_config_file_starting_with_digit() {
+    log_test "Validating config with directive starting with digit..."
+
+    local config="
+PermitRootLogin no
+123Invalid yes
+PasswordAuthentication yes
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    parse_config_file "$tmpfile" > /dev/null
+    PARSE_ERRORS_FILE=""
+
+    local errors
+    errors=$(get_parse_errors "$errors_file")
+
+    if assert_contains "$errors" "123Invalid"; then
+        log_pass "Detect directive starting with digit"
+        rm -f "$errors_file"
+    else
+        log_fail "Detect directive starting with digit"
+        rm -f "$errors_file"
+    fi
+}
+
+test_validate_config_file_invalid_start_char() {
+    log_test "Validating config with invalid start character..."
+
+    local config="
+PermitRootLogin no
+@InvalidDirective yes
+PasswordAuthentication yes
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    parse_config_file "$tmpfile" > /dev/null
+    PARSE_ERRORS_FILE=""
+
+    local errors
+    errors=$(get_parse_errors "$errors_file")
+
+    if assert_contains "$errors" "@InvalidDirective"; then
+        log_pass "Detect directive with invalid start character"
+        rm -f "$errors_file"
+    else
+        log_fail "Detect directive with invalid start character"
+        rm -f "$errors_file"
+    fi
+}
+
+test_parse_config_strict() {
+    log_test "Testing strict parsing with error counting..."
+
+    local config="
+PermitRootLogin no
+123Bad value
+PasswordAuthentication yes
+@Invalid test
+Port 22
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    local result
+    result=$(parse_config_strict "$tmpfile" "$errors_file" 2>&1)
+
+    local error_count
+    error_count=$(count_parse_errors "$errors_file")
+
+    if [[ "$error_count" -eq 2 ]]; then
+        log_pass "Strict parsing error count"
+        rm -f "$errors_file"
+    else
+        log_fail "Strict parsing error count (expected 2, got $error_count)"
+        rm -f "$errors_file"
+    fi
+}
+
+test_get_parse_error_summary() {
+    log_test "Testing parse error summary generation..."
+
+    local config="
+123Bad value
+@Invalid test
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    parse_config_file "$tmpfile" > /dev/null
+    PARSE_ERRORS_FILE=""
+
+    local summary
+    summary=$(get_parse_error_summary "$errors_file")
+
+    if assert_contains "$summary" "2" && assert_contains "$summary" "malformed"; then
+        log_pass "Parse error summary"
+        rm -f "$errors_file"
+    else
+        log_fail "Parse error summary"
+        rm -f "$errors_file"
+    fi
+}
+
 test_check_permit_root_login_yes() {
     log_test "Checking PermitRootLogin yes (critical)..."
 
@@ -716,6 +840,78 @@ PasswordAuthentication yes
     fi
 }
 
+test_audit_severely_malformed_config() {
+    log_test "Running audit on severely malformed config..."
+
+    local config="
+123 all numbers
+@special chars!!!
+===more special===
+no_valid_directive_here
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    local parsed
+    parsed=$(parse_config_file "$tmpfile")
+    PARSE_ERRORS_FILE=""
+
+    local error_count
+    error_count=$(count_parse_errors "$errors_file")
+    rm -f "$errors_file"
+
+    if [[ "$error_count" -ge 3 ]]; then
+        log_pass "Severely malformed config detection"
+    else
+        log_fail "Severely malformed config detection (expected >=3 errors, got $error_count)"
+    fi
+}
+
+test_audit_mixed_valid_invalid_config() {
+    log_test "Running audit on mixed valid/invalid config..."
+
+    local config="
+# Mixed config
+PermitRootLogin no
+123Invalid yes
+PasswordAuthentication no
+@BadDir value
+Port 22
+X11Forwarding no
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local errors_file
+    errors_file=$(mktemp)
+
+    PARSE_ERRORS_FILE="$errors_file"
+    local parsed
+    parsed=$(parse_config_file "$tmpfile")
+    PARSE_ERRORS_FILE=""
+
+    local valid_count=0
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && ((valid_count++))
+    done <<< "$parsed"
+
+    local error_count
+    error_count=$(count_parse_errors "$errors_file")
+    rm -f "$errors_file"
+
+    if [[ "$valid_count" -ge 4 && "$error_count" -eq 2 ]]; then
+        log_pass "Mixed valid/invalid config handling"
+    else
+        log_fail "Mixed valid/invalid config handling (valid: $valid_count, errors: $error_count)"
+    fi
+}
+
 run_all_tests() {
     echo ""
     echo "========================================"
@@ -738,7 +934,13 @@ run_all_tests() {
     test_parse_error_messages
     test_clear_parse_errors
     test_parse_valid_after_malformed
+    test_validate_config_file_starting_with_digit
+    test_validate_config_file_invalid_start_char
+    test_parse_config_strict
+    test_get_parse_error_summary
     test_full_audit_with_malformed_entries
+    test_audit_severely_malformed_config
+    test_audit_mixed_valid_invalid_config
     echo ""
 
     echo -e "${BLUE}--- Security Checks Tests ---${RESET}"
