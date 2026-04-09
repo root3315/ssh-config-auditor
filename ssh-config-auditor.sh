@@ -235,11 +235,9 @@ run_audit() {
     local tmpdirectives
     tmpdirectives=$(mktemp)
 
-    PARSE_ERRORS_FILE="$errors_file"
-    if ! parse_config_strict "$file" > "$tmpdirectives" 2>&1; then
+    if ! parse_config_strict "$file" "$errors_file" > "$tmpdirectives" 2>&1; then
         log warn "Config file contains malformed entries"
     fi
-    PARSE_ERRORS_FILE=""
 
     if has_parse_errors "$errors_file"; then
         log warn "Malformed config entries detected in $file:"
