@@ -235,31 +235,29 @@ run_audit() {
     local tmpdirectives
     tmpdirectives=$(mktemp)
 
-    if ! parse_config_strict "$file" "$errors_file" > "$tmpdirectives" 2>&1; then
-        log warn "Config file contains malformed entries"
-    fi
+    # Parse directives to stdout, summary to stderr — keep them separate
+    parse_config_strict "$file" "$errors_file" > "$tmpdirectives"
 
+    # Report any malformed entries found during parsing
     if has_parse_errors "$errors_file"; then
-        log warn "Malformed config entries detected in $file:"
-        while IFS= read -r error; do
-            echo "  $error" >&2
-        done < "$errors_file"
-        
         local error_count
         error_count=$(count_parse_errors "$errors_file")
-        log warn "Total malformed entries: $error_count"
+        log warn "Found $error_count malformed entr(ies) in $file:"
+        while IFS= read -r error_line; do
+            log warn "  $error_line"
+        done < "$errors_file"
     fi
 
+    rm -f "$errors_file"
+
+    # Build directive map from clean parsed output only
     local -A directives
     while IFS='=' read -r key value; do
         [[ -z "$key" ]] && continue
-        [[ "$key" =~ ^[0-9]+$ ]] && continue
-        [[ "$key" == "Parsed:"* ]] && continue
-        [[ "$key" == "Errors:"* ]] && continue
         directives["$key"]="$value"
     done < "$tmpdirectives"
 
-    rm -f "$tmpdirectives" "$errors_file"
+    rm -f "$tmpdirectives"
 
     if [[ ${#directives[@]} -eq 0 ]]; then
         log warn "No valid directives found in config file"

@@ -263,57 +263,10 @@ count_parse_errors() {
     fi
 }
 
-validate_config_file() {
-    local file="$1"
-    local line_num=0
-    local errors=0
-    local warnings=0
-
-    if [[ ! -f "$file" ]]; then
-        echo "ERROR: Not a regular file: $file" >&2
-        return 1
-    fi
-
-    if [[ ! -r "$file" ]]; then
-        echo "ERROR: Cannot read file: $file" >&2
-        return 1
-    fi
-
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        ((line_num++))
-        local trimmed_line="$line"
-        trimmed_line="${trimmed_line#"${trimmed_line%%[![:space:]]*}"}"
-
-        [[ -z "$trimmed_line" ]] && continue
-        [[ "$trimmed_line" =~ ^# ]] && continue
-
-        if [[ "$trimmed_line" =~ ^[0-9] ]]; then
-            echo "Line $line_num: Directive cannot start with a digit: $trimmed_line" >&2
-            ((errors++))
-        elif [[ "$trimmed_line" =~ ^[^A-Za-z0-9] ]]; then
-            echo "Line $line_num: Invalid character at start of directive: $trimmed_line" >&2
-            ((errors++))
-        elif [[ ! "$trimmed_line" =~ ^[A-Za-z][A-Za-z0-9]*[[:space:]=] ]]; then
-            echo "Line $line_num: Malformed directive format: $trimmed_line" >&2
-            ((warnings++))
-        fi
-
-    done < "$file"
-
-    if [[ $errors -gt 0 ]]; then
-        return 2
-    elif [[ $warnings -gt 0 ]]; then
-        return 1
-    fi
-
-    return 0
-}
-
 parse_config_strict() {
     local file="$1"
     local errors_file="$2"
     local line_num=0
-    local parsed_count=0
     local error_count=0
 
     if [[ ! -r "$file" ]]; then
@@ -343,13 +296,11 @@ parse_config_strict() {
             value="${BASH_REMATCH[2]}"
             directive=$(normalize_directive "$directive")
             echo "${directive}=${value}"
-            ((parsed_count++))
         elif [[ "$line" =~ ^([A-Za-z][A-Za-z0-9]*)[[:space:]]*=[[:space:]]*(.*) ]]; then
             directive="${BASH_REMATCH[1]}"
             value="${BASH_REMATCH[2]}"
             directive=$(normalize_directive "$directive")
             echo "${directive}=${value}"
-            ((parsed_count++))
         else
             if [[ -n "$errors_file" ]]; then
                 echo "Line $line_num: Malformed entry: $original_line" >> "$errors_file"
@@ -358,8 +309,6 @@ parse_config_strict() {
         fi
 
     done < "$file"
-
-    echo "Parsed: $parsed_count, Errors: $error_count" >&2
 
     [[ $error_count -eq 0 ]]
 }
