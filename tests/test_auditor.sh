@@ -21,6 +21,33 @@ RESET="\033[0m"
 source "${PROJECT_DIR}/lib/config_parser.sh"
 source "${PROJECT_DIR}/lib/security_checks.sh"
 source "${PROJECT_DIR}/lib/reporter.sh"
+source "${PROJECT_DIR}/lib/custom_rules.sh"
+
+declare -a ISSUES=()
+declare -A ISSUE_COUNTS=(
+    [critical]=0
+    [high]=0
+    [medium]=0
+    [low]=0
+    [info]=0
+)
+
+declare -A CONFIG=(
+    [verbose]=0
+    [quiet]=0
+    [output_format]="text"
+    [output_file]=""
+    [check_level]="standard"
+    [include_recommended]=0
+    [rules_file]=""
+)
+
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    # No-op for tests
+}
 
 log_test() {
     echo -e "${BLUE}[TEST]${RESET} $1"
@@ -912,6 +939,356 @@ X11Forwarding no
     fi
 }
 
+create_rules_file() {
+    local content="$1"
+    local tmpfile
+    tmpfile=$(mktemp)
+    echo "$content" > "$tmpfile"
+    echo "$tmpfile"
+}
+
+test_custom_rules_validate_rules_file() {
+    log_test "Testing rules file validation..."
+
+    local rules="
+# Valid rules
+high|PermitRootLogin|eq|no|Root login must be disabled
+critical|PermitEmptyPasswords|eq|no|Empty passwords must be disabled
+medium|X11Forwarding|eq|no|X11 forwarding must be disabled
+"
+    local tmpfile
+    tmpfile=$(create_rules_file "$rules")
+    TEMP_FILES+=("$tmpfile")
+
+    if validate_rules_file "$tmpfile"; then
+        log_pass "Rules file validation"
+    else
+        log_fail "Rules file validation"
+    fi
+}
+
+test_custom_rules_invalid_rules_file() {
+    log_test "Testing invalid rules file detection..."
+
+    local rules="
+bad_severity|PermitRootLogin|eq|no|Bad severity
+high|PermitRootLogin|badop|no|Bad operator
+"
+    local tmpfile
+    tmpfile=$(create_rules_file "$rules")
+    TEMP_FILES+=("$tmpfile")
+
+    if ! validate_rules_file "$tmpfile"; then
+        log_pass "Invalid rules file detection"
+    else
+        log_fail "Invalid rules file detection"
+    fi
+}
+
+test_custom_rules_eq_operator() {
+    log_test "Testing custom rule eq operator..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="PermitRootLogin yes"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="high|PermitRootLogin|eq|no|Root login must be disabled"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[high]} -eq 1 ]]; then
+        log_pass "Custom rule eq operator (violation)"
+    else
+        log_fail "Custom rule eq operator (expected 1 high issue)"
+    fi
+}
+
+test_custom_rules_neq_operator() {
+    log_test "Testing custom rule neq operator..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="PermitRootLogin yes"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="high|PermitRootLogin|neq|yes|Root login must not be yes"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[high]} -eq 1 ]]; then
+        log_pass "Custom rule neq operator (violation)"
+    else
+        log_fail "Custom rule neq operator (expected 1 high issue)"
+    fi
+}
+
+test_custom_rules_in_operator() {
+    log_test "Testing custom rule in operator..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="LogLevel INFO"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="low|LogLevel|in|VERBOSE,DEBUG|LogLevel must be VERBOSE or DEBUG"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[low]} -eq 1 ]]; then
+        log_pass "Custom rule in operator (violation)"
+    else
+        log_fail "Custom rule in operator (expected 1 low issue)"
+    fi
+}
+
+test_custom_rules_notin_operator() {
+    log_test "Testing custom rule notin operator..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="Ciphers 3des-cbc"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="critical|Ciphers|notin|3des-cbc,aes128-cbc|Weak ciphers must not be used"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[critical]} -eq 1 ]]; then
+        log_pass "Custom rule notin operator (violation)"
+    else
+        log_fail "Custom rule notin operator (expected 1 critical issue)"
+    fi
+}
+
+test_custom_rules_exists_operator() {
+    log_test "Testing custom rule exists operator..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="Port 22"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="info|Banner|exists||Banner directive must be set"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[info]} -eq 1 ]]; then
+        log_pass "Custom rule exists operator (violation - Banner not set)"
+    else
+        log_fail "Custom rule exists operator (expected 1 info issue)"
+    fi
+}
+
+test_custom_rules_notexists_operator() {
+    log_test "Testing custom rule notexists operator..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="Banner /etc/ssh/banner"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="low|Banner|notexists||Banner directive should not be set"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[low]} -eq 1 ]]; then
+        log_pass "Custom rule notexists operator (violation)"
+    else
+        log_fail "Custom rule notexists operator (expected 1 low issue)"
+    fi
+}
+
+test_custom_rules_regex_operator() {
+    log_test "Testing custom rule regex operator..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="ListenAddress 192.168.1.1"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="medium|ListenAddress|regex|^127\.0\.0\.1$|Must bind to localhost"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[medium]} -eq 1 ]]; then
+        log_pass "Custom rule regex operator (violation)"
+    else
+        log_fail "Custom rule regex operator (expected 1 medium issue)"
+    fi
+}
+
+test_custom_rules_multiple_rules() {
+    log_test "Testing multiple custom rules..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="
+PermitRootLogin yes
+PasswordAuthentication yes
+X11Forwarding yes
+"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="
+critical|PermitRootLogin|eq|no|Root login must be disabled
+high|PasswordAuthentication|eq|no|Password auth must be disabled
+medium|X11Forwarding|eq|no|X11 forwarding must be disabled
+"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    local total=$((ISSUE_COUNTS[critical] + ISSUE_COUNTS[high] + ISSUE_COUNTS[medium]))
+
+    if [[ $total -eq 3 ]]; then
+        log_pass "Multiple custom rules"
+    else
+        log_fail "Multiple custom rules (expected 3 issues, got $total)"
+    fi
+}
+
+test_custom_rules_with_comments() {
+    log_test "Testing rules file with comments..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="PermitRootLogin yes"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="
+# This is a comment
+high|PermitRootLogin|eq|no|Root login must be disabled
+# Another comment
+"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[high]} -eq 1 ]]; then
+        log_pass "Rules file with comments"
+    else
+        log_fail "Rules file with comments"
+    fi
+}
+
+test_custom_rules_blank_lines() {
+    log_test "Testing rules file with blank lines..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="PermitRootLogin yes"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="
+
+high|PermitRootLogin|eq|no|Root login must be disabled
+
+
+"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[high]} -eq 1 ]]; then
+        log_pass "Rules file with blank lines"
+    else
+        log_fail "Rules file with blank lines"
+    fi
+}
+
+test_custom_rules_severity_levels() {
+    log_test "Testing all severity levels in custom rules..."
+
+    ISSUES=()
+    declare -A ISSUE_COUNTS=([critical]=0 [high]=0 [medium]=0 [low]=0 [info]=0)
+
+    local config="PermitRootLogin yes"
+    local tmpfile
+    tmpfile=$(create_temp_file "$config")
+    TEMP_FILES+=("$tmpfile")
+
+    local rules="
+critical|PermitRootLogin|eq|no|Critical rule
+high|PermitRootLogin|eq|no|High rule
+medium|PermitRootLogin|eq|no|Medium rule
+low|PermitRootLogin|eq|no|Low rule
+info|PermitRootLogin|eq|no|Info rule
+"
+    local rules_file
+    rules_file=$(create_rules_file "$rules")
+    TEMP_FILES+=("$rules_file")
+
+    run_custom_rules "$tmpfile" "$rules_file"
+
+    if [[ ${ISSUE_COUNTS[critical]} -eq 1 && \
+          ${ISSUE_COUNTS[high]} -eq 1 && \
+          ${ISSUE_COUNTS[medium]} -eq 1 && \
+          ${ISSUE_COUNTS[low]} -eq 1 && \
+          ${ISSUE_COUNTS[info]} -eq 1 ]]; then
+        log_pass "All severity levels"
+    else
+        log_fail "All severity levels (expected 1 of each, got critical=${ISSUE_COUNTS[critical]} high=${ISSUE_COUNTS[high]} medium=${ISSUE_COUNTS[medium]} low=${ISSUE_COUNTS[low]} info=${ISSUE_COUNTS[info]})"
+    fi
+}
+
 run_all_tests() {
     echo ""
     echo "========================================"
@@ -966,6 +1343,22 @@ run_all_tests() {
     echo -e "${BLUE}--- Integration Tests ---${RESET}"
     test_full_audit_insecure_config
     test_full_audit_secure_config
+    echo ""
+
+    echo -e "${BLUE}--- Custom Rules Tests ---${RESET}"
+    test_custom_rules_validate_rules_file
+    test_custom_rules_invalid_rules_file
+    test_custom_rules_eq_operator
+    test_custom_rules_neq_operator
+    test_custom_rules_in_operator
+    test_custom_rules_notin_operator
+    test_custom_rules_exists_operator
+    test_custom_rules_notexists_operator
+    test_custom_rules_regex_operator
+    test_custom_rules_multiple_rules
+    test_custom_rules_with_comments
+    test_custom_rules_blank_lines
+    test_custom_rules_severity_levels
     echo ""
 
     cleanup_temp_files

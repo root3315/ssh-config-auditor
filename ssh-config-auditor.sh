@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/config_parser.sh"
 source "${SCRIPT_DIR}/lib/security_checks.sh"
 source "${SCRIPT_DIR}/lib/reporter.sh"
+source "${SCRIPT_DIR}/lib/custom_rules.sh"
 
 VERSION="1.0.0"
 
@@ -23,6 +24,7 @@ declare -A CONFIG=(
     [output_file]=""
     [check_level]="standard"
     [include_recommended]=0
+    [rules_file]=""
 )
 
 declare -A COLORS=(
@@ -62,6 +64,7 @@ Options:
   -f, --format FORMAT     Output format: text, json, csv (default: text)
   -l, --level LEVEL       Check level: basic, standard, strict (default: standard)
   -r, --recommended       Include recommended (non-critical) checks
+  -R, --rules FILE        Load custom policy rules from FILE
   --version               Show version information
 
 Exit Codes:
@@ -161,6 +164,14 @@ parse_args() {
                 CONFIG[include_recommended]=1
                 shift
                 ;;
+            -R|--rules)
+                if [[ -z "${2:-}" ]]; then
+                    log error "Rules file not specified"
+                    exit 5
+                fi
+                CONFIG[rules_file]="$2"
+                shift 2
+                ;;
             -*)
                 log error "Unknown option: $1"
                 usage
@@ -222,6 +233,7 @@ detect_config_type() {
 
 run_audit() {
     local file="$1"
+    local rules_file="${2:-}"
 
     if ! validate_config_file "$file"; then
         return 1
@@ -294,6 +306,10 @@ run_audit() {
     check_permit_tunnel "$file" "${directives[PermitTunnel]:-}"
     check_subsystem "$file" "${directives[Subsystem]:-}"
 
+    if [[ -n "$rules_file" ]]; then
+        run_custom_rules "$file" "$rules_file" "${directives[@]}"
+    fi
+
     return 0
 }
 
@@ -323,10 +339,16 @@ main() {
         exit 5
     fi
 
+    if [[ -n "${CONFIG[rules_file]}" ]]; then
+        if ! validate_rules_file "${CONFIG[rules_file]}"; then
+            exit 5
+        fi
+    fi
+
     local audit_failed=0
     for config_file in "${CONFIG_FILES[@]}"; do
         log info "Processing: $config_file"
-        if ! run_audit "$config_file"; then
+        if ! run_audit "$config_file" "${CONFIG[rules_file]}"; then
             audit_failed=1
         fi
     done
